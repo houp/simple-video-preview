@@ -17,6 +17,7 @@ def _avfoundation():
     from AVFoundation import (
         AVCaptureDevice,
         AVCaptureDeviceInput,
+        AVCaptureStillImageOutput,
         AVCapturePhotoOutput,
         AVCapturePhotoQualityPrioritizationSpeed,
         AVCapturePhotoSettings,
@@ -27,11 +28,15 @@ def _avfoundation():
         AVCaptureSessionPresetHigh,
         AVCaptureSessionPresetInputPriority,
         AVCaptureSessionPresetPhoto,
+        AVMediaTypeVideo,
+        AVVideoCodecJPEG,
+        AVVideoCodecKey,
     )
 
     return {
         "AVCaptureDevice": AVCaptureDevice,
         "AVCaptureDeviceInput": AVCaptureDeviceInput,
+        "AVCaptureStillImageOutput": AVCaptureStillImageOutput,
         "AVCapturePhotoOutput": AVCapturePhotoOutput,
         "AVCapturePhotoQualityPrioritizationSpeed": AVCapturePhotoQualityPrioritizationSpeed,
         "AVCapturePhotoSettings": AVCapturePhotoSettings,
@@ -42,6 +47,9 @@ def _avfoundation():
         "AVCaptureSessionPresetHigh": AVCaptureSessionPresetHigh,
         "AVCaptureSessionPresetInputPriority": AVCaptureSessionPresetInputPriority,
         "AVCaptureSessionPresetPhoto": AVCaptureSessionPresetPhoto,
+        "AVMediaTypeVideo": AVMediaTypeVideo,
+        "AVVideoCodecJPEG": AVVideoCodecJPEG,
+        "AVVideoCodecKey": AVVideoCodecKey,
     }
 
 
@@ -161,6 +169,64 @@ def capture_one_frame(
     selected = resolve_device(devices, device_id=None, device_name=device_name, device_index=None)
     session, _device_input = create_capture_session_for_device(avfoundation, selected.unique_id, requested_preset)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if "AVCaptureStillImageOutput" in avfoundation:
+        return _capture_with_still_image_output(
+            session,
+            avfoundation,
+            appkit,
+            output_path,
+            timeout,
+            warmup,
+            attempts,
+            retry_on_black,
+        )
+
+    return _capture_with_photo_output(
+        session,
+        avfoundation,
+        appkit,
+        output_path,
+        timeout,
+        warmup,
+        attempts,
+        retry_on_black,
+    )
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    width, height = capture_one_frame(
+        args.device_name,
+        args.resolution,
+        args.output,
+        args.timeout,
+        args.warmup,
+        args.attempts,
+        args.retry_on_black,
+    )
+    print(f"Saved {args.output} ({width}x{height})")
+    return 0
+
+
+def _output_type_for_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix not in FILE_TYPES:
+        supported = ", ".join(sorted(FILE_TYPES))
+        raise ValueError(f"Unsupported output file extension {suffix!r}. Supported: {supported}")
+    return FILE_TYPES[suffix]
+
+
+def _capture_with_photo_output(
+    session,
+    avfoundation: dict[str, object],
+    appkit: dict[str, object],
+    output_path: Path,
+    timeout: float,
+    warmup: float,
+    attempts: int,
+    retry_on_black: bool,
+) -> tuple[int, int]:
     photo_output = avfoundation["AVCapturePhotoOutput"].alloc().init()
     if not session.canAddOutput_(photo_output):
         raise RuntimeError("Capture session cannot add photo output")
@@ -179,7 +245,6 @@ def capture_one_frame(
             avfoundation["AVCapturePhotoQualityPrioritizationSpeed"]
         )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     done_event = threading.Event()
     delegate = PhotoCaptureDelegate.alloc().initWithOutputPath_appkit_doneEvent_(
         output_path,
@@ -189,22 +254,12 @@ def capture_one_frame(
 
     session.startRunning()
     try:
-        from Foundation import NSRunLoop
-
-        if warmup:
-            deadline = time.monotonic() + warmup
-            while time.monotonic() < deadline:
-                NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+        _run_warmup(warmup)
 
         last_error: Exception | None = None
         for attempt_index in range(attempts):
             photo_output.capturePhotoWithSettings_delegate_(settings, delegate)
-
-            deadline = time.monotonic() + timeout
-            while not done_event.is_set():
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out after {timeout:.1f}s waiting for captured frame")
-                NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+            _wait_for_done_event(done_event, timeout)
 
             if delegate._error is None and delegate._captured_size is not None:
                 if retry_on_black:
@@ -230,34 +285,157 @@ def capture_one_frame(
                     appkit,
                     done_event,
                 )
-                NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.25))
+                _run_for_seconds(0.25)
 
         raise RuntimeError(str(last_error) if last_error is not None else "Failed to capture frame")
     finally:
         session.stopRunning()
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    width, height = capture_one_frame(
-        args.device_name,
-        args.resolution,
-        args.output,
-        args.timeout,
-        args.warmup,
-        args.attempts,
-        args.retry_on_black,
+def _capture_with_still_image_output(
+    session,
+    avfoundation: dict[str, object],
+    appkit: dict[str, object],
+    output_path: Path,
+    timeout: float,
+    warmup: float,
+    attempts: int,
+    retry_on_black: bool,
+) -> tuple[int, int]:
+    still_output = avfoundation["AVCaptureStillImageOutput"].alloc().init()
+    if hasattr(still_output, "setOutputSettings_"):
+        still_output.setOutputSettings_(
+            {avfoundation["AVVideoCodecKey"]: avfoundation["AVVideoCodecJPEG"]}
+        )
+
+    if not session.canAddOutput_(still_output):
+        raise RuntimeError("Capture session cannot add still image output")
+    session.addOutput_(still_output)
+
+    connection = _video_connection_for_output(still_output, avfoundation["AVMediaTypeVideo"])
+    if connection is None:
+        raise RuntimeError("Capture output does not expose a video connection")
+
+    session.startRunning()
+    try:
+        _run_warmup(warmup)
+
+        last_error: Exception | None = None
+        for attempt_index in range(attempts):
+            done_event = threading.Event()
+            capture_state: dict[str, object] = {"error": None, "captured_size": None}
+
+            def completion_handler(*args) -> None:
+                try:
+                    sample_buffer, error = _extract_still_image_callback_args(args)
+                    if error is not None:
+                        raise RuntimeError(str(error))
+                    if sample_buffer is None:
+                        raise RuntimeError("Still image callback returned no sample buffer")
+                    jpeg_data = avfoundation["AVCaptureStillImageOutput"].jpegStillImageNSDataRepresentation_(
+                        sample_buffer
+                    )
+                    if jpeg_data is None:
+                        raise RuntimeError("Failed to convert sample buffer into image data")
+                    capture_state["captured_size"] = _write_encoded_image_data(
+                        jpeg_data,
+                        output_path,
+                        appkit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    capture_state["error"] = exc
+                finally:
+                    done_event.set()
+
+            still_output.captureStillImageAsynchronouslyFromConnection_completionHandler_(
+                connection,
+                completion_handler,
+            )
+            _wait_for_done_event(done_event, timeout)
+
+            captured_size = capture_state["captured_size"]
+            if capture_state["error"] is None and isinstance(captured_size, tuple):
+                if retry_on_black:
+                    bitmap_rep = _bitmap_rep_from_path(output_path, appkit)
+                    if bitmap_rep is not None and _bitmap_rep_looks_black(bitmap_rep):
+                        last_error = RuntimeError("Captured frame is black")
+                    else:
+                        return captured_size
+                else:
+                    return captured_size
+
+            if isinstance(capture_state["error"], Exception):
+                last_error = capture_state["error"]
+            elif last_error is None:
+                last_error = RuntimeError("Failed to capture frame")
+
+            if attempt_index + 1 < attempts:
+                if output_path.exists():
+                    output_path.unlink()
+                _run_for_seconds(0.25)
+
+        raise RuntimeError(str(last_error) if last_error is not None else "Failed to capture frame")
+    finally:
+        session.stopRunning()
+
+
+def _run_warmup(warmup: float) -> None:
+    if warmup:
+        _run_for_seconds(warmup)
+
+
+def _run_for_seconds(duration: float) -> None:
+    from Foundation import NSRunLoop
+
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+
+
+def _wait_for_done_event(done_event: threading.Event, timeout: float) -> None:
+    from Foundation import NSRunLoop
+
+    deadline = time.monotonic() + timeout
+    while not done_event.is_set():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out after {timeout:.1f}s waiting for captured frame")
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+
+
+def _video_connection_for_output(output, media_type):
+    connection = output.connectionWithMediaType_(media_type)
+    if connection is not None:
+        return connection
+    if hasattr(output, "firstEnabledConnectionForMediaType_"):
+        return output.firstEnabledConnectionForMediaType_(media_type)
+    return None
+
+
+def _extract_still_image_callback_args(args: tuple[object, ...]) -> tuple[object | None, object | None]:
+    if len(args) == 2:
+        return args[0], args[1]
+    if len(args) == 3:
+        return args[1], args[2]
+    raise RuntimeError(f"Unexpected still image callback arguments: {len(args)}")
+
+
+def _write_encoded_image_data(encoded_data, output_path: Path, appkit: dict[str, object]) -> tuple[int, int]:
+    bitmap_rep = _bitmap_rep_from_data(encoded_data, appkit)
+    if bitmap_rep is None:
+        raise RuntimeError("Failed to create bitmap representation from captured image data")
+
+    captured_size = (int(bitmap_rep.pixelsWide()), int(bitmap_rep.pixelsHigh()))
+    output_type = _output_type_for_path(output_path)
+    converted_data = bitmap_rep.representationUsingType_properties_(
+        appkit[output_type],
+        {},
     )
-    print(f"Saved {args.output} ({width}x{height})")
-    return 0
+    if converted_data is None:
+        raise RuntimeError(f"Failed to encode image for {output_path}")
 
-
-def _output_type_for_path(path: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix not in FILE_TYPES:
-        supported = ", ".join(sorted(FILE_TYPES))
-        raise ValueError(f"Unsupported output file extension {suffix!r}. Supported: {supported}")
-    return FILE_TYPES[suffix]
+    if not converted_data.writeToFile_atomically_(str(output_path), True):
+        raise RuntimeError(f"Failed to write output file {output_path}")
+    return captured_size
 
 
 def _bitmap_rep_from_data(photo_data, appkit: dict[str, object]):

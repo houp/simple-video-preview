@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from simple_video_preview.capture_support import normalize_resolution_value
-from simple_video_preview.frame_grabber import _output_type_for_path
+from simple_video_preview.frame_grabber import _extract_still_image_callback_args, _output_type_for_path
 
 
 class NormalizeResolutionTests(unittest.TestCase):
@@ -27,6 +27,29 @@ class OutputTypeTests(unittest.TestCase):
     def test_unsupported_extension_raises(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported output file extension"):
             _output_type_for_path(Path("frame.gif"))
+
+
+class StillImageCallbackTests(unittest.TestCase):
+    def test_accepts_two_argument_callback_shape(self) -> None:
+        sample_buffer = object()
+        error = object()
+        self.assertEqual(
+            _extract_still_image_callback_args((sample_buffer, error)),
+            (sample_buffer, error),
+        )
+
+    def test_accepts_three_argument_callback_shape(self) -> None:
+        block = object()
+        sample_buffer = object()
+        error = object()
+        self.assertEqual(
+            _extract_still_image_callback_args((block, sample_buffer, error)),
+            (sample_buffer, error),
+        )
+
+    def test_rejects_unexpected_callback_shape(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Unexpected still image callback arguments"):
+            _extract_still_image_callback_args((object(),))
 
 
 if __name__ == "__main__":
