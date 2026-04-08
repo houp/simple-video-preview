@@ -7,8 +7,9 @@ Minimal macOS camera preview app in Python.
 - All code in this repository is fully AI-generated.
 - It has only been tested on an up-to-date macOS installation: macOS 26.4 (build 25E246).
 - It has not been tested on older macOS releases, non-macOS systems, or a broad range of capture hardware.
+- It is intended as a small, practical utility rather than a fully production-hardened capture application.
 
-Features:
+## Features
 
 - plain resizable window
 - native fullscreen support
@@ -16,6 +17,10 @@ Features:
 - configuration from CLI flags or JSON file
 - highest supported capture preset by default, with optional override
 - no in-window controls
+
+## License
+
+This project is released under the MIT license. See [LICENSE](/Users/witoldbolt/code/camera/LICENSE).
 
 ## Requirements
 
@@ -29,6 +34,10 @@ Features:
 UV_CACHE_DIR=.uv-cache uv venv --python /opt/homebrew/bin/python3.14
 UV_CACHE_DIR=.uv-cache uv sync
 ```
+
+## Permissions
+
+On first launch, macOS may ask for camera access permission for the terminal app or launcher you used to start the preview. If access is denied, the preview window may open without a working video feed.
 
 ## Usage
 
@@ -80,3 +89,13 @@ UV_CACHE_DIR=.uv-cache uv run video-preview preview --config preview.json
 - If more than one selector is provided, resolution order is: `device_id`, `device_name`, `device_index`.
 - `session_preset` can be `auto`, `4k`, `2160p`, `1080p`, `720p`, `high`, `photo`, or `input-priority`.
 - `auto` prefers `4k`, then `1080p`, then `720p`, then `high`.
+- A 4K source shown fullscreen on a 5K display will still be upscaled, so it will not look perfectly native-sharp.
+- `Ctrl+C`, the window close button, and `Cmd+Q` should all terminate the app cleanly.
+
+## Development
+
+Run tests:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run python -m unittest discover -s tests -v
+```

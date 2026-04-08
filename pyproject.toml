@@ -4,10 +4,27 @@ version = "0.1.0"
 description = "Minimal macOS camera preview window with CLI and JSON config."
 readme = "README.md"
 requires-python = ">=3.14"
+license = "MIT"
+keywords = ["camera", "macos", "preview", "pyobjc", "video"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Multimedia :: Video :: Capture",
+]
 dependencies = [
   "pyobjc-framework-AVFoundation>=11.1",
   "pyobjc-framework-Cocoa>=11.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/houp/simple-video-preview"
+Repository = "https://github.com/houp/simple-video-preview"
+Issues = "https://github.com/houp/simple-video-preview/issues"
 
 [project.scripts]
 video-preview = "simple_video_preview.cli:main"
