@@ -14,6 +14,7 @@ Minimal macOS camera preview app in Python.
 - plain resizable window
 - native fullscreen support
 - camera selection by index, name, or unique device id
+- runtime source switching from the `Video` app menu
 - configuration from CLI flags or JSON file
 - highest supported capture preset by default, with optional override
 - no in-window controls
@@ -85,6 +86,7 @@ UV_CACHE_DIR=.uv-cache uv run video-preview preview --config preview.json
 ## Notes
 
 - The window is intentionally empty other than the live preview layer.
+- The top app menu includes a `Video` section for one-click switching between available video devices while the preview is running.
 - Use standard macOS fullscreen controls or shortcuts to enter fullscreen.
 - If more than one selector is provided, resolution order is: `device_id`, `device_name`, `device_index`.
 - `session_preset` can be `auto`, `4k`, `2160p`, `1080p`, `720p`, `high`, `photo`, or `input-priority`.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from simple_video_preview.devices import VideoDevice, resolve_device
+from simple_video_preview.devices import VideoDevice, find_device_by_unique_id, resolve_device
 
 
 class ResolveDeviceTests(unittest.TestCase):
@@ -31,6 +31,15 @@ class ResolveDeviceTests(unittest.TestCase):
     def test_resolve_raises_for_missing_device(self) -> None:
         with self.assertRaisesRegex(ValueError, "No device found"):
             resolve_device(self.devices, device_id="missing", device_name=None, device_index=None)
+
+    def test_find_device_by_unique_id_returns_match(self) -> None:
+        device = find_device_by_unique_id(self.devices, "cam-1")
+        self.assertIsNotNone(device)
+        assert device is not None
+        self.assertEqual(device.name, "USB")
+
+    def test_find_device_by_unique_id_returns_none_for_missing(self) -> None:
+        self.assertIsNone(find_device_by_unique_id(self.devices, "missing"))
 
 
 if __name__ == "__main__":

@@ -60,3 +60,10 @@ def resolve_device(
         raise ValueError(f"No device found for device_index={device_index}")
 
     return devices[0]
+
+
+def find_device_by_unique_id(devices: list[VideoDevice], unique_id: str) -> VideoDevice | None:
+    for device in devices:
+        if device.unique_id == unique_id:
+            return device
+    return None
