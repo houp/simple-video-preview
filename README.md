@@ -15,6 +15,7 @@ Minimal macOS camera preview app in Python.
 - native fullscreen support
 - camera selection by index, name, or unique device id
 - runtime source switching from the `Video` app menu
+- runtime preset switching from the `Resolution` app menu
 - configuration from CLI flags or JSON file
 - highest supported capture preset by default, with optional override
 - no in-window controls
@@ -83,10 +84,35 @@ cp preview.example.json preview.json
 UV_CACHE_DIR=.uv-cache uv run video-preview preview --config preview.json
 ```
 
+Grab one frame headlessly and save it to a file:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run python scripts/grab_frame.py \
+  --device-name "FaceTime HD Camera" \
+  --resolution 1920x1080 \
+  --warmup 2.0 \
+  --output frame.jpg
+```
+
+Retry on black output only when you explicitly want that behavior:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run python scripts/grab_frame.py \
+  --device-name "FaceTime HD Camera" \
+  --resolution 1920x1080 \
+  --output frame.jpg \
+  --retry-on-black
+```
+
 ## Notes
 
 - The window is intentionally empty other than the live preview layer.
 - The top app menu includes a `Video` section for one-click switching between available video devices while the preview is running.
+- The top app menu includes a `Resolution` section for one-click capture preset changes while the preview is running.
+- The headless frame grabber accepts `auto`, `4k`, `2160p`, `1080p`, `720p`, `high`, `photo`, `input-priority`, `3840x2160`, `1920x1080`, and `1280x720`.
+- The headless frame grabber writes `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, or `.tiff`.
+- The headless frame grabber supports `--warmup`, `--timeout`, and `--attempts`.
+- The headless frame grabber accepts black frames by default because a black image can be a valid signal, for example from an HDMI capture source. Use `--retry-on-black` only when you want black frames treated as suspicious.
 - Use standard macOS fullscreen controls or shortcuts to enter fullscreen.
 - If more than one selector is provided, resolution order is: `device_id`, `device_name`, `device_index`.
 - `session_preset` can be `auto`, `4k`, `2160p`, `1080p`, `720p`, `high`, `photo`, or `input-priority`.

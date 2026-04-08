@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from PyObjCTools import AppHelper
 
+from .capture_support import (
+    PRESET_ALIASES,
+    PRESET_MENU_ITEMS,
+    create_capture_session_for_device,
+    normalize_resolution_value,
+    preset_candidates,
+    supported_session_presets,
+)
 from .config import PreviewConfig
 from .devices import find_device_by_unique_id, list_video_devices, resolve_device
 
@@ -94,24 +102,6 @@ def _avfoundation():
     }
 
 
-PRESET_ALIASES = {
-    "4k": "AVCaptureSessionPreset3840x2160",
-    "2160p": "AVCaptureSessionPreset3840x2160",
-    "1080p": "AVCaptureSessionPreset1920x1080",
-    "720p": "AVCaptureSessionPreset1280x720",
-    "high": "AVCaptureSessionPresetHigh",
-    "photo": "AVCaptureSessionPresetPhoto",
-    "input-priority": "AVCaptureSessionPresetInputPriority",
-}
-
-AUTO_PRESET_ORDER = [
-    "AVCaptureSessionPreset3840x2160",
-    "AVCaptureSessionPreset1920x1080",
-    "AVCaptureSessionPreset1280x720",
-    "AVCaptureSessionPresetHigh",
-]
-
-
 def run_preview(config: PreviewConfig) -> None:
     devices = list_video_devices()
     selected = resolve_device(devices, **_selector_args(config))
@@ -180,6 +170,7 @@ def run_preview(config: PreviewConfig) -> None:
             self._config = preview_config
             self._current_device_id = current_device.unique_id
             self._video_menu = None
+            self._preset_menu = None
             return self
 
         def applicationShouldTerminateAfterLastWindowClosed_(self, _app):
@@ -195,21 +186,29 @@ def run_preview(config: PreviewConfig) -> None:
             unique_id = str(sender.representedObject())
             if unique_id == self._current_device_id:
                 return
-            self._switch_to_device(unique_id)
+            self._replace_active_session(unique_id, self._config.session_preset)
+
+        def selectSessionPreset_(self, sender):
+            preset = str(sender.representedObject())
+            if preset == self._config.session_preset:
+                return
+            self._replace_active_session(self._current_device_id, preset)
 
         def menuNeedsUpdate_(self, menu):
             if self._video_menu is not None and menu == self._video_menu:
                 self._reload_video_menu()
+            if self._preset_menu is not None and menu == self._preset_menu:
+                self._reload_preset_menu()
 
-        def _switch_to_device(self, unique_id: str) -> None:
+        def _replace_active_session(self, unique_id: str, session_preset: str) -> None:
             try:
                 replacement_session, _replacement_input = _create_capture_session_for_device(
                     self._avfoundation,
                     unique_id,
-                    self._config.session_preset,
+                    session_preset,
                 )
             except RuntimeError as error:
-                print(f"Unable to switch to {unique_id}: {error}")
+                print(f"Unable to apply device={unique_id} preset={session_preset}: {error}")
                 return
 
             previous_session = self._session
@@ -219,12 +218,14 @@ def run_preview(config: PreviewConfig) -> None:
                 replacement_session.startRunning()
                 self._session = replacement_session
                 self._current_device_id = unique_id
+                self._config.session_preset = session_preset
             except Exception:
                 self._preview_layer.setSession_(previous_session)
                 previous_session.startRunning()
                 raise
 
             self._reload_video_menu()
+            self._reload_preset_menu()
 
         def _reload_video_menu(self) -> None:
             if self._video_menu is None:
@@ -252,9 +253,35 @@ def run_preview(config: PreviewConfig) -> None:
                 self._current_device_id = devices[0].unique_id
                 self._reload_video_menu()
 
+        def _reload_preset_menu(self) -> None:
+            if self._preset_menu is None:
+                return
+
+            self._preset_menu.removeAllItems()
+            supported_presets = _supported_session_presets(self._avfoundation, self._current_device_id)
+            for preset, title in PRESET_MENU_ITEMS:
+                item = self._appkit["NSMenuItem"].alloc().initWithTitle_action_keyEquivalent_(
+                    title,
+                    "selectSessionPreset:",
+                    "",
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_(preset)
+                item.setEnabled_(preset == "auto" or preset in supported_presets)
+                item.setState_(
+                    self._appkit["NSControlStateValueOn"]
+                    if preset == self._config.session_preset
+                    else self._appkit["NSControlStateValueOff"]
+                )
+                self._preset_menu.addItem_(item)
+
         def attachVideoMenu_(self, menu):
             self._video_menu = menu
             self._reload_video_menu()
+
+        def attachPresetMenu_(self, menu):
+            self._preset_menu = menu
+            self._reload_preset_menu()
 
     app = appkit["NSApplication"].sharedApplication()
     app.setActivationPolicy_(appkit["NSApplicationActivationPolicyRegular"])
@@ -310,41 +337,15 @@ def _selector_args(config: PreviewConfig) -> dict[str, str | int | None]:
 
 
 def _configure_session_preset(session, avfoundation: dict[str, object], requested_preset: str) -> None:
-    for preset_name in _preset_candidates(requested_preset):
-        preset_value = avfoundation[preset_name]
-        if session.canSetSessionPreset_(preset_value):
-            session.setSessionPreset_(preset_value)
-            return
-
-    if requested_preset != "auto":
-        raise RuntimeError(f"Selected device does not support session preset {requested_preset!r}")
+    configure_session_preset(session, avfoundation, requested_preset)
 
 
 def _create_capture_session_for_device(avfoundation: dict[str, object], unique_id: str, requested_preset: str):
-    device = avfoundation["AVCaptureDevice"].deviceWithUniqueID_(unique_id)
-    if device is None:
-        raise RuntimeError(f"Unable to access device {unique_id!r}")
-
-    device_input, error = avfoundation["AVCaptureDeviceInput"].deviceInputWithDevice_error_(device, None)
-    if device_input is None:
-        message = str(error) if error is not None else "unknown error"
-        raise RuntimeError(f"Unable to create capture input: {message}")
-
-    session = avfoundation["AVCaptureSession"].alloc().init()
-    if not session.canAddInput_(device_input):
-        raise RuntimeError("Capture session cannot add selected device input")
-
-    session.addInput_(device_input)
-    _configure_session_preset(session, avfoundation, requested_preset)
-    return session, device_input
+    return create_capture_session_for_device(avfoundation, unique_id, requested_preset)
 
 
 def _preset_candidates(requested_preset: str) -> list[str]:
-    if requested_preset == "auto":
-        return AUTO_PRESET_ORDER
-
-    preset_name = PRESET_ALIASES[requested_preset]
-    return [preset_name]
+    return preset_candidates(requested_preset)
 
 
 def _backing_scale_for_view(view) -> float:
@@ -384,6 +385,15 @@ def _build_main_menu(appkit: dict[str, object], controller, app_name: str):
     video_menu_item.setTitle_("Video")
     controller.attachVideoMenu_(video_menu)
 
+    preset_menu_item = appkit["NSMenuItem"].alloc().init()
+    menu_bar.addItem_(preset_menu_item)
+
+    preset_menu = appkit["NSMenu"].alloc().initWithTitle_("Resolution")
+    preset_menu.setDelegate_(controller)
+    preset_menu_item.setSubmenu_(preset_menu)
+    preset_menu_item.setTitle_("Resolution")
+    controller.attachPresetMenu_(preset_menu)
+
     return menu_bar
 
 
@@ -392,3 +402,7 @@ def _device_menu_title(device, devices: list) -> str:
     if name_count > 1:
         return f"{device.name} ({device.index})"
     return device.name
+
+
+def _supported_session_presets(avfoundation: dict[str, object], unique_id: str) -> set[str]:
+    return supported_session_presets(avfoundation, unique_id)
